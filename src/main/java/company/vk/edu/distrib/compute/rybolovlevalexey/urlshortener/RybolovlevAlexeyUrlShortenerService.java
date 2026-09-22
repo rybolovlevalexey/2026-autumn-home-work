@@ -3,6 +3,7 @@ package company.vk.edu.distrib.compute.rybolovlevalexey.urlshortener;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Random;
@@ -27,6 +28,7 @@ public class RybolovlevAlexeyUrlShortenerService implements UrlShortenerService 
     private final HttpServer server;
     private static final Logger log = LoggerFactory.getLogger(RybolovlevAlexeyUrlShortenerService.class);
     private final Dao<String> dao = new RybolovlevAlexeyDao();
+    private final Dao<String> authDao = new RybolovlevAlexeyDao();
     private final ShortLinkIDGenerator shortLinkGenerator = new ShortLinkIDGenerator(10);
 
     public RybolovlevAlexeyUrlShortenerService(int port) throws IOException {
@@ -53,6 +55,18 @@ public class RybolovlevAlexeyUrlShortenerService implements UrlShortenerService 
         server.createContext("/v0/links", new ErrorHandler(new HttpHandler() {
             @Override
             public void handle(HttpExchange httpExchange) throws IOException {
+                try {
+                    if (!checkAuth(httpExchange)) {
+                        httpExchange.sendResponseHeaders(401, 0);
+                        httpExchange.close();
+                        return;
+                    }
+                } catch (RuntimeException e) {
+                    httpExchange.sendResponseHeaders(401, 0);
+                    httpExchange.close();
+                    return;
+                }
+
                 var requestMethod = httpExchange.getRequestMethod();
                 log.info("Request to {} with method {}", PATH_PREFIX_V0_LINKS, requestMethod);
 
@@ -102,6 +116,32 @@ public class RybolovlevAlexeyUrlShortenerService implements UrlShortenerService 
                 httpExchange.close();
             }
         }));
+
+        server.createContext("/internal/users", new ErrorHandler(new HttpHandler() {
+            @Override
+            public void handle(HttpExchange httpExchange) throws IOException {
+                final var requestMethod = httpExchange.getRequestMethod();
+
+                if (!Objects.equals(METHOD_POST, requestMethod)) {
+                    httpExchange.sendResponseHeaders(405, 0);
+                    httpExchange.close();
+                    return;
+                }
+
+                final var body = new String(httpExchange.getRequestBody().readAllBytes());
+                final var splitIndex = body.indexOf(':');
+
+                if (splitIndex != -1 && body.indexOf(':', splitIndex + 1) == -1) {
+                    final var username = body.substring(0, splitIndex);
+                    final var password = body.substring(splitIndex + 1);
+                    authDao.upsert(username, password);
+                    httpExchange.sendResponseHeaders(200, 0);
+                } else {
+                    httpExchange.sendResponseHeaders(422, 0);
+                }
+                httpExchange.close();
+            }
+        }));
     }
 
     @Override
@@ -112,6 +152,32 @@ public class RybolovlevAlexeyUrlShortenerService implements UrlShortenerService 
     @Override
     public void stop() {
         this.server.stop(1);
+    }
+
+    private boolean checkAuth(HttpExchange httpExchange) {
+        final var authHeader = httpExchange.getRequestHeaders().getFirst("Authorization");
+        if (authHeader == null || !authHeader.startsWith("Basic ")) {
+            return false;
+        }
+        final var credentials = authHeader.substring("Basic ".length());
+        final var decodedStr = new String(
+            Base64.getDecoder().decode(credentials), StandardCharsets.UTF_8);
+        final var splitIndex = decodedStr.indexOf(':');
+        if (splitIndex == -1) {
+            return false;
+        }
+        final var username = decodedStr.substring(0, splitIndex);
+        final var password = decodedStr.substring(splitIndex + 1);
+
+        try {
+            final var passwordFromDao = authDao.get(username);
+            if (password.isEmpty() || !password.equals(passwordFromDao)) {
+                return false;
+            }
+        } catch (IOException | NoSuchElementException e) {
+            return false;
+        }
+        return true;
     }
 
     private void getV0LinksHandler(HttpExchange httpExchange) throws IOException {
@@ -155,12 +221,15 @@ public class RybolovlevAlexeyUrlShortenerService implements UrlShortenerService 
         log.info("Received request to PUT {} with body {} and link ID {}", PATH_PREFIX_V0_LINKS, body, linkID);
 
         try {
+            RybolovlevAlexeyUrlShortenerUtils.validateLinkID(linkID);
             RybolovlevAlexeyUrlShortenerUtils.validateLink(body);
             dao.get(linkID);
             dao.upsert(linkID, body);
             httpExchange.sendResponseHeaders(200, 0);
         } catch (NoSuchElementException e) {
             httpExchange.sendResponseHeaders(404, 0);
+        } catch (IllegalArgumentException e) {
+            httpExchange.sendResponseHeaders(422, 0);
         }
         httpExchange.close();
     }
@@ -171,10 +240,13 @@ public class RybolovlevAlexeyUrlShortenerService implements UrlShortenerService 
         log.info("Received request to DELETE {} with link ID {}", PATH_PREFIX_V0_LINKS, linkID);
 
         try {
+            RybolovlevAlexeyUrlShortenerUtils.validateLinkID(linkID);
             dao.delete(linkID);
             httpExchange.sendResponseHeaders(202, 0);
         } catch (NoSuchElementException e) {
             httpExchange.sendResponseHeaders(404, 0);
+        } catch (IllegalArgumentException e) {
+            httpExchange.sendResponseHeaders(422, 0);
         }
         httpExchange.close();
     }

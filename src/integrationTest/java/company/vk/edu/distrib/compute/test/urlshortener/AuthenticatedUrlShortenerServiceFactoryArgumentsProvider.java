@@ -5,12 +5,12 @@ import company.vk.edu.distrib.compute.urlshortener.UrlShortenerAuthTest;
 import org.junit.jupiter.params.provider.ArgumentsProvider;
 
 public class AuthenticatedUrlShortenerServiceFactoryArgumentsProvider
-    extends AbstractArgumentsProvider implements ArgumentsProvider {
+        extends AbstractArgumentsProvider implements ArgumentsProvider {
 
     public AuthenticatedUrlShortenerServiceFactoryArgumentsProvider() {
         super(
-            AbstractArgumentsProvider.findAnnotatedFactories(UrlShortenerAuthTest.class),
-            AbstractHttpServiceFactory.class
+                AbstractArgumentsProvider.findAnnotatedFactories(UrlShortenerAuthTest.class),
+                AbstractHttpServiceFactory.class
         );
     }
 }
