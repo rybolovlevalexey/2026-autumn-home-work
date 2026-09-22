@@ -5,6 +5,7 @@ import java.net.URISyntaxException;
 
 public final class RybolovlevAlexeyUrlShortenerUtils {
     private static final String CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    private static final int LENGTH_CORRECT_LINK_ID = 10;
 
     private RybolovlevAlexeyUrlShortenerUtils() {
     }
@@ -13,7 +14,7 @@ public final class RybolovlevAlexeyUrlShortenerUtils {
         if (linkID == null) {
             throw new IllegalArgumentException("key can not be null");
         }
-        if (linkID.length() != 10) {
+        if (linkID.length() != LENGTH_CORRECT_LINK_ID) {
             throw new IllegalArgumentException("invalid length " + linkID.length() + " of key - " + linkID);
         }
         int i = 0;

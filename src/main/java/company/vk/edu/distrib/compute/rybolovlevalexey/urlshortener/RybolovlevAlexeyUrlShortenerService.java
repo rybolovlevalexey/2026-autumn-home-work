@@ -86,6 +86,7 @@ public class RybolovlevAlexeyUrlShortenerService implements UrlShortenerService 
                 default:
                     httpExchange.sendResponseHeaders(405, 0);
                     httpExchange.close();
+                    break;
             }
         };
     }
