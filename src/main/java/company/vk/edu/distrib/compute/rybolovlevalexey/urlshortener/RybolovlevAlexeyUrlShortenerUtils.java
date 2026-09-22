@@ -3,40 +3,40 @@ package company.vk.edu.distrib.compute.rybolovlevalexey.urlshortener;
 import java.net.URI;
 import java.net.URISyntaxException;
 
-public class RybolovlevAlexeyUrlShortenerUtils {
+public final class RybolovlevAlexeyUrlShortenerUtils {
     private static final String CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
-    public RybolovlevAlexeyUrlShortenerUtils(){
-
+    private RybolovlevAlexeyUrlShortenerUtils() {
     }
+
     public static void validateLinkID(String linkID) throws IllegalArgumentException {
-        if (linkID == null){
+        if (linkID == null) {
             throw new IllegalArgumentException("key can not be null");
         }
-        if (linkID.length() != 10){
+        if (linkID.length() != 10) {
             throw new IllegalArgumentException("invalid length " + linkID.length() + " of key - " + linkID);
         }
         int i = 0;
-        while (i < linkID.length()){
+        while (i < linkID.length()) {
             var value = linkID.charAt(i);
-            if (CHARS.indexOf(value) == -1){
+            if (CHARS.indexOf(value) == -1) {
                 throw new IllegalArgumentException("contains not allowed char");
             }
-            i += 1;
+            i++;
         }
     }
 
     public static void validateLink(String link) {
-        if (link == null || link.isBlank()){
+        if (link == null || link.isBlank()) {
             throw new IllegalArgumentException("key can not be null");
         }
-        try{
+        try {
             URI uri = new URI(link);
-            if (!uri.isAbsolute() || uri.getScheme() == null || uri.getHost() == null){
+            if (!uri.isAbsolute() || uri.getScheme() == null || uri.getHost() == null) {
                 throw new IllegalArgumentException("not allowed url syntax");
             }
-        } catch (URISyntaxException e){
-            throw new IllegalArgumentException("not allowed url syntax");
+        } catch (URISyntaxException e) {
+            throw new IllegalArgumentException("not allowed url syntax", e);
         }
     }
 }
