@@ -35,113 +35,105 @@ public class RybolovlevAlexeyUrlShortenerService implements UrlShortenerService 
         this.port = port;
         this.server = HttpServer.create(new InetSocketAddress(port), 0);
 
-        server.createContext(
-            "/v0/status",
-            new ErrorHandler(new HttpHandler() {
-                @Override
-                public void handle(HttpExchange httpExchange) throws IOException {
-                    log.info("Received request /v0/status");
-                    var requestMethod = httpExchange.getRequestMethod();
-                    if (METHOD_GET.equals(requestMethod)) {
-                        httpExchange.sendResponseHeaders(200, 0);
-                    } else {
-                        httpExchange.sendResponseHeaders(405, 0);
-                    }
-                    httpExchange.close();
-                }
+        server.createContext("/v0/status", new ErrorHandler(statusHandler()));
+        server.createContext("/v0/links", new ErrorHandler(linksHandler()));
+        server.createContext("/", new ErrorHandler(redirectHandler()));
+        server.createContext("/internal/users", new ErrorHandler(usersHandler()));
+    }
+
+    private HttpHandler statusHandler() {
+        return httpExchange -> {
+            log.info("Received request /v0/status");
+            final var requestMethod = httpExchange.getRequestMethod();
+            if (METHOD_GET.equals(requestMethod)) {
+                httpExchange.sendResponseHeaders(200, 0);
+            } else {
+                httpExchange.sendResponseHeaders(405, 0);
             }
-        ));
+            httpExchange.close();
+        };
+    }
 
-        server.createContext("/v0/links", new ErrorHandler(new HttpHandler() {
-            @Override
-            public void handle(HttpExchange httpExchange) throws IOException {
-                try {
-                    if (!checkAuth(httpExchange)) {
-                        httpExchange.sendResponseHeaders(401, 0);
-                        httpExchange.close();
-                        return;
-                    }
-                } catch (RuntimeException e) {
-                    httpExchange.sendResponseHeaders(401, 0);
-                    httpExchange.close();
-                    return;
-                }
-
-                var requestMethod = httpExchange.getRequestMethod();
-                log.info("Request to {} with method {}", PATH_PREFIX_V0_LINKS, requestMethod);
-
-                switch (requestMethod) {
-                    case METHOD_GET:
-                        getV0LinksHandler(httpExchange);
-                        break;
-                    case METHOD_POST:
-                        postV0LinksHandler(httpExchange);
-                        break;
-                    case METHOD_PUT:
-                        putV0LinksHandler(httpExchange);
-                        break;
-                    case METHOD_DELETE:
-                        deleteV0LinksHandler(httpExchange);
-                        break;
-                    default:
-                        httpExchange.sendResponseHeaders(405, 0);
-                        httpExchange.close();
-                }
-            }
-        }));
-
-        server.createContext("/", new ErrorHandler(new HttpHandler() {
-            @Override
-            public void handle(HttpExchange httpExchange) throws IOException {
-                final var requestMethod = httpExchange.getRequestMethod();
-                final var path = httpExchange.getRequestURI().getPath();
-                log.info("Received request for redirect with method {} and ID {}", requestMethod, path);
-                final var linkID = path.substring(1);
-
-                if (!Objects.equals(requestMethod, METHOD_GET)) {
-                    httpExchange.sendResponseHeaders(405, 0);
-                    return;
-                }
-                try {
-                    RybolovlevAlexeyUrlShortenerUtils.validateLinkID(linkID);
-                    final var longLink = dao.get(linkID);
-
-                    httpExchange.getResponseHeaders().add("Location", longLink);
-                    httpExchange.sendResponseHeaders(301, -1);
-                } catch (IllegalArgumentException e) {
-                    httpExchange.sendResponseHeaders(422, 0);
-                } catch (NoSuchElementException e) {
-                    httpExchange.sendResponseHeaders(404, 0);
-                }
+    private HttpHandler linksHandler() {
+        return httpExchange -> {
+            if (!checkAuth(httpExchange)) {
+                httpExchange.sendResponseHeaders(401, 0);
                 httpExchange.close();
+                return;
             }
-        }));
 
-        server.createContext("/internal/users", new ErrorHandler(new HttpHandler() {
-            @Override
-            public void handle(HttpExchange httpExchange) throws IOException {
-                final var requestMethod = httpExchange.getRequestMethod();
+            final var requestMethod = httpExchange.getRequestMethod();
+            log.info("Request to {} with method {}", PATH_PREFIX_V0_LINKS, requestMethod);
 
-                if (!Objects.equals(METHOD_POST, requestMethod)) {
+            switch (requestMethod) {
+                case METHOD_GET:
+                    getV0LinksHandler(httpExchange);
+                    break;
+                case METHOD_POST:
+                    postV0LinksHandler(httpExchange);
+                    break;
+                case METHOD_PUT:
+                    putV0LinksHandler(httpExchange);
+                    break;
+                case METHOD_DELETE:
+                    deleteV0LinksHandler(httpExchange);
+                    break;
+                default:
                     httpExchange.sendResponseHeaders(405, 0);
                     httpExchange.close();
-                    return;
-                }
-
-                final var body = new String(httpExchange.getRequestBody().readAllBytes());
-                final var splitIndex = body.indexOf(':');
-
-                if (splitIndex != -1 && body.indexOf(':', splitIndex + 1) == -1) {
-                    final var username = body.substring(0, splitIndex);
-                    final var password = body.substring(splitIndex + 1);
-                    authDao.upsert(username, password);
-                    httpExchange.sendResponseHeaders(200, 0);
-                } else {
-                    httpExchange.sendResponseHeaders(422, 0);
-                }
-                httpExchange.close();
             }
-        }));
+        };
+    }
+
+    private HttpHandler redirectHandler() {
+        return httpExchange -> {
+            final var requestMethod = httpExchange.getRequestMethod();
+            final var path = httpExchange.getRequestURI().getPath();
+            log.info("Received request for redirect with method {} and ID {}", requestMethod, path);
+            final var linkID = path.substring(1);
+
+            if (!Objects.equals(requestMethod, METHOD_GET)) {
+                httpExchange.sendResponseHeaders(405, 0);
+                return;
+            }
+            try {
+                RybolovlevAlexeyUrlShortenerUtils.validateLinkID(linkID);
+                final var longLink = dao.get(linkID);
+
+                httpExchange.getResponseHeaders().add("Location", longLink);
+                httpExchange.sendResponseHeaders(301, -1);
+            } catch (IllegalArgumentException e) {
+                httpExchange.sendResponseHeaders(422, 0);
+            } catch (NoSuchElementException e) {
+                httpExchange.sendResponseHeaders(404, 0);
+            }
+            httpExchange.close();
+        };
+    }
+
+    private HttpHandler usersHandler() {
+        return httpExchange -> {
+            final var requestMethod = httpExchange.getRequestMethod();
+
+            if (!Objects.equals(METHOD_POST, requestMethod)) {
+                httpExchange.sendResponseHeaders(405, 0);
+                httpExchange.close();
+                return;
+            }
+
+            final var body = new String(httpExchange.getRequestBody().readAllBytes());
+            final var splitIndex = body.indexOf(':');
+
+            if (splitIndex != -1 && body.indexOf(':', splitIndex + 1) == -1) {
+                final var username = body.substring(0, splitIndex);
+                final var password = body.substring(splitIndex + 1);
+                authDao.upsert(username, password);
+                httpExchange.sendResponseHeaders(200, 0);
+            } else {
+                httpExchange.sendResponseHeaders(422, 0);
+            }
+            httpExchange.close();
+        };
     }
 
     @Override
@@ -160,8 +152,13 @@ public class RybolovlevAlexeyUrlShortenerService implements UrlShortenerService 
             return false;
         }
         final var credentials = authHeader.substring("Basic ".length());
-        final var decodedStr = new String(
-            Base64.getDecoder().decode(credentials), StandardCharsets.UTF_8);
+        final String decodedStr;
+        try {
+            decodedStr = new String(
+                Base64.getDecoder().decode(credentials), StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
         final var splitIndex = decodedStr.indexOf(':');
         if (splitIndex == -1) {
             return false;
