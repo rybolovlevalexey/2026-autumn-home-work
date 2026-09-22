@@ -3,6 +3,7 @@ package company.vk.edu.distrib.compute.rybolovlevalexey.urlshortener;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.Base64;
 import java.util.NoSuchElementException;
 import java.util.Objects;
@@ -27,13 +28,17 @@ public class RybolovlevAlexeyUrlShortenerService implements UrlShortenerService 
     private final int port;
     private final HttpServer server;
     private static final Logger log = LoggerFactory.getLogger(RybolovlevAlexeyUrlShortenerService.class);
-    private final Dao<String> dao = new RybolovlevAlexeyDao();
-    private final Dao<String> authDao = new RybolovlevAlexeyDao();
+    private final Dao<String> dao;
+    private final Dao<String> authDao;
     private final ShortLinkIDGenerator shortLinkGenerator = new ShortLinkIDGenerator(10);
 
     public RybolovlevAlexeyUrlShortenerService(int port) throws IOException {
         this.port = port;
         this.server = HttpServer.create(new InetSocketAddress(port), 0);
+        // используются захардкоженные названия файлов, чтобы не заморачиваться
+        // можно добавить как параметры инициализации
+        this.dao = new RybolovlevAlexeyPersistentDao(Path.of("data", "links.properties"));
+        this.authDao = new RybolovlevAlexeyPersistentDao(Path.of("data", "users.properties"));
 
         server.createContext("/v0/status", new ErrorHandler(statusHandler()));
         server.createContext("/v0/links", new ErrorHandler(linksHandler()));
@@ -114,7 +119,7 @@ public class RybolovlevAlexeyUrlShortenerService implements UrlShortenerService 
     private HttpHandler usersHandler() {
         return httpExchange -> {
             final var requestMethod = httpExchange.getRequestMethod();
-
+            log.info("Received request to /internal/users with method {}", requestMethod);
             if (!Objects.equals(METHOD_POST, requestMethod)) {
                 httpExchange.sendResponseHeaders(405, 0);
                 httpExchange.close();
@@ -144,6 +149,12 @@ public class RybolovlevAlexeyUrlShortenerService implements UrlShortenerService 
     @Override
     public void stop() {
         this.server.stop(1);
+        try {
+            this.dao.close();
+            this.authDao.close();
+        } catch (IOException e) {
+            log.error("Failed to save data on stop", e);
+        }
     }
 
     private boolean checkAuth(HttpExchange httpExchange) {
