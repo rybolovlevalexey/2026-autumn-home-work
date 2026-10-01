@@ -1,24 +1,33 @@
 package company.vk.edu.distrib.compute.rybolovlevalexey.urlshortener;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.util.List;
 import java.util.NoSuchElementException;
-import java.util.Properties;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
 import company.vk.edu.distrib.compute.Dao;
 
 public class RybolovlevAlexeyPersistentDao implements Dao<String> {
+    private static final String UPSERT_ACTION = "upsert";
+    private static final String REMOVE_ACTION = "remove";
 
     private final Map<String, String> storage = new ConcurrentHashMap<>();
     private final Path filePath;
 
     public RybolovlevAlexeyPersistentDao(Path filePath) throws IOException {
         this.filePath = filePath;
+
+        Files.createDirectories(this.filePath.getParent());
+        if (Files.notExists(filePath)) {
+            Files.createFile(filePath);
+        }
+
         load();
     }
 
@@ -34,38 +43,41 @@ public class RybolovlevAlexeyPersistentDao implements Dao<String> {
     @Override
     public void upsert(String key, String value) throws IllegalArgumentException, IOException {
         storage.put(key, value);
+        save(String.format("%s;%s;%s", UPSERT_ACTION, key, value));
     }
 
     @Override
     public void delete(String key) throws IllegalArgumentException, IOException {
         storage.remove(key);
+        save(String.format("%s;%s", REMOVE_ACTION, key));
     }
 
     @Override
     public void close() throws IOException {
-        save();
+        // nothing to close
+    }
+
+    private void save(String action) throws IOException {
+        Files.writeString(filePath,action + System.lineSeparator(),
+                StandardCharsets.UTF_8, StandardOpenOption.APPEND);
     }
 
     private void load() throws IOException {
-        if (!Files.exists(filePath)) {
+        if (!Files.exists(this.filePath)) {
             return;
         }
-        final var properties = new Properties();
-        try (InputStream in = Files.newInputStream(filePath)) {
-            properties.load(in);
-        }
-        properties.forEach((key, value) -> storage.put((String) key, (String) value));
-    }
 
-    private void save() throws IOException {
-        final var properties = new Properties();
-        storage.forEach(properties::put);
-        final var parent = filePath.getParent();
-        if (parent != null) {
-            Files.createDirectories(parent);
-        }
-        try (OutputStream out = Files.newOutputStream(filePath)) {
-            properties.store(out, null);
+        List<String> lines = Files.readAllLines(this.filePath);
+
+        for (String line: lines) {
+            String[] terms = line.split(";");
+
+            if (Objects.equals(UPSERT_ACTION, terms[0])) {
+                storage.put(terms[1], terms[2]);
+            }
+            if (Objects.equals(REMOVE_ACTION, terms[0])) {
+                storage.remove(terms[1]);
+            }
         }
     }
 }
