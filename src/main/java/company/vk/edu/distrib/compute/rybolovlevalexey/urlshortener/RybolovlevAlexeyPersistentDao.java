@@ -20,6 +20,15 @@ public class RybolovlevAlexeyPersistentDao implements Dao<String> {
     public RybolovlevAlexeyPersistentDao(Path filePath) throws IOException {
         this.filePath = filePath;
         load();
+        Runtime.getRuntime().addShutdownHook(new Thread(this::closeQuietly));
+    }
+
+    private void closeQuietly() {
+        try {
+            save();
+        } catch (IOException e) {
+            Thread.currentThread().getUncaughtExceptionHandler().uncaughtException(Thread.currentThread(), e);
+        }
     }
 
     @Override
@@ -34,11 +43,13 @@ public class RybolovlevAlexeyPersistentDao implements Dao<String> {
     @Override
     public void upsert(String key, String value) throws IllegalArgumentException, IOException {
         storage.put(key, value);
+        save();
     }
 
     @Override
     public void delete(String key) throws IllegalArgumentException, IOException {
         storage.remove(key);
+        save();
     }
 
     @Override
