@@ -1,4 +1,4 @@
-package company.vk.edu.distrib.compute.rybalexey.kv;
+package company.vk.edu.distrib.compute.rybolovlevalexey.kv;
 
 import company.vk.edu.distrib.compute.AbstractHttpServiceFactory;
 import company.vk.edu.distrib.compute.kv.KVServiceTest;

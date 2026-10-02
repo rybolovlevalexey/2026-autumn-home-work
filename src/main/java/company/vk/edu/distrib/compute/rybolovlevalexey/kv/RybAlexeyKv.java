@@ -1,4 +1,4 @@
-package company.vk.edu.distrib.compute.rybalexey.kv;
+package company.vk.edu.distrib.compute.rybolovlevalexey.kv;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
@@ -17,24 +17,21 @@ import java.util.NoSuchElementException;
 
 public class RybAlexeyKv implements KVService {
     private static final String METHOD_GET = "GET";
-    private static final String METHOD_POST = "POST";
     private static final String METHOD_PUT = "PUT";
     private static final String METHOD_DELETE = "DELETE";
 
     private static final String LINK_ENTITY_V0 = "/v0/entity/";
     private static final String LINK_STATUS_V0 = "/v0/status";
 
-    private final int port;
     private final HttpServer server;
-    private Dao<byte[]> dao;
+    private final Dao<byte[]> dao;
     private static final Logger log = LoggerFactory.getLogger(RybAlexeyKv.class);
 
     public RybAlexeyKv(int port) throws IOException {
-        this.port = port;
         this.server = HttpServer.create(new InetSocketAddress(port), 0);
 
         final Path dataDir = Path.of(System.getProperty("java.io.tmpdir"), "rybolovlevalexey-kv-data");
-        this.dao = RybolovlevAlexeyPersistentDao.bytesBased(dataDir.resolve("entity.properties"));
+        this.dao = RybolovlevAlexeyPersistentDao.bytesBased(dataDir.resolve("entity-" + port + ".properties"));
 
         server.createContext(LINK_STATUS_V0, new ErrorHandler(statusHandler()));
         server.createContext(LINK_ENTITY_V0, new ErrorHandler(entityHandler()));
@@ -54,7 +51,7 @@ public class RybAlexeyKv implements KVService {
         };
     }
 
-    private HttpHandler entityHandler(){
+    private HttpHandler entityHandler() {
         log.info("Creating of entityHandler");
         return httpExchange -> {
             var method = httpExchange.getRequestMethod();
@@ -89,7 +86,7 @@ public class RybAlexeyKv implements KVService {
 
     private void getEntityHandler(HttpExchange httpExchange, String entityID) throws IOException {
         log.info("Using getEntityHandler with entityID {}", entityID);
-        try{
+        try {
             final byte[] entityResult = dao.get(entityID);
 
             httpExchange.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
@@ -103,9 +100,8 @@ public class RybAlexeyKv implements KVService {
         } catch (NoSuchElementException e) {
             httpExchange.sendResponseHeaders(404, 0);
             log.info("getEntityHandler for entityID {} 404", entityID);
-        } finally {
-            httpExchange.close();
         }
+        httpExchange.close();
     }
 
     private void putEntityHandler(HttpExchange httpExchange, String entityID, byte[] body) throws IOException {
@@ -115,7 +111,7 @@ public class RybAlexeyKv implements KVService {
             httpExchange.sendResponseHeaders(201, 0);
             log.info("putEntityHandler for entityID {} 201", entityID);
             httpExchange.close();
-        } catch (IllegalArgumentException e){
+        } catch (IllegalArgumentException e) {
             httpExchange.sendResponseHeaders(422, 0);
             log.info("putEntityHandler for entityID {} 422", entityID);
             httpExchange.close();
@@ -129,7 +125,7 @@ public class RybAlexeyKv implements KVService {
             httpExchange.sendResponseHeaders(202, 0);
             log.info("deleteEntityHandler for entityID {} 202", entityID);
             httpExchange.close();
-        } catch (IllegalArgumentException e){
+        } catch (IllegalArgumentException e) {
             httpExchange.sendResponseHeaders(422, 0);
             log.info("deleteEntityHandler for entityID {} 422", entityID);
             httpExchange.close();

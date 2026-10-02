@@ -25,10 +25,10 @@ public class RybolovlevAlexeyUrlShortenerService implements UrlShortenerService 
     private static final String METHOD_DELETE = "DELETE";
     private static final String PATH_PREFIX_V0_LINKS = "/v0/links/";
 
-    private final int port;
+private final int port;
     private final HttpServer server;
     private static final Logger log = LoggerFactory.getLogger(RybolovlevAlexeyUrlShortenerService.class);
-    private final Dao<String> dao;
+    private Dao<String> dao;
     private final Dao<String> authDao;
     private final ShortLinkIDGenerator shortLinkGenerator = new ShortLinkIDGenerator(10);
 
@@ -157,6 +157,11 @@ public class RybolovlevAlexeyUrlShortenerService implements UrlShortenerService 
         } catch (IOException e) {
             log.error("Failed to save data on stop", e);
         }
+    }
+
+    @Override
+    public void setLinksDao(Dao<String> dao) {
+        this.dao = Objects.requireNonNull(dao);
     }
 
     private boolean checkAuth(HttpExchange httpExchange) {
