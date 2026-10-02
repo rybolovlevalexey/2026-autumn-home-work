@@ -25,7 +25,7 @@ public class RybolovlevAlexeyUrlShortenerService implements UrlShortenerService 
     private static final String METHOD_DELETE = "DELETE";
     private static final String PATH_PREFIX_V0_LINKS = "/v0/links/";
 
-private final int port;
+    private final int port;
     private final HttpServer server;
     private static final Logger log = LoggerFactory.getLogger(RybolovlevAlexeyUrlShortenerService.class);
     private Dao<String> dao;
@@ -35,9 +35,7 @@ private final int port;
     public RybolovlevAlexeyUrlShortenerService(int port) throws IOException {
         this.port = port;
         this.server = HttpServer.create(new InetSocketAddress(port), 0);
-        // используются захардкоженные названия файлов, чтобы не заморачиваться
-        // можно добавить как параметры инициализации
-        final Path dataDir = Path.of(System.getProperty("java.io.tmpdir"), "rybolovlevalexey-data");
+        final Path dataDir = Path.of(System.getProperty("java.io.tmpdir"), "rybolovlevalexey-kv-data");
         this.dao = RybolovlevAlexeyPersistentDao.stringBased(dataDir.resolve("links.properties"));
         this.authDao = RybolovlevAlexeyPersistentDao.stringBased(dataDir.resolve("users.properties"));
 
