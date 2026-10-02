@@ -38,8 +38,8 @@ public class RybolovlevAlexeyUrlShortenerService implements UrlShortenerService 
         // используются захардкоженные названия файлов, чтобы не заморачиваться
         // можно добавить как параметры инициализации
         final Path dataDir = Path.of(System.getProperty("java.io.tmpdir"), "rybolovlevalexey-data");
-        this.dao = new RybolovlevAlexeyPersistentDao(dataDir.resolve("links.properties"));
-        this.authDao = new RybolovlevAlexeyPersistentDao(dataDir.resolve("users.properties"));
+        this.dao = RybolovlevAlexeyPersistentDao.stringBased(dataDir.resolve("links.properties"));
+        this.authDao = RybolovlevAlexeyPersistentDao.stringBased(dataDir.resolve("users.properties"));
 
         server.createContext("/v0/status", new ErrorHandler(statusHandler()));
         server.createContext("/v0/links", new ErrorHandler(linksHandler()));
