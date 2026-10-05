@@ -1,33 +1,29 @@
 package company.vk.edu.distrib.compute.rybolovlevalexey.urlshortener;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.NoSuchElementException;
-import java.util.Properties;
-import java.util.Map;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.List;
-import java.util.NoSuchElementException;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
 import company.vk.edu.distrib.compute.Dao;
 
-public class RybolovlevAlexeyPersistentDao implements Dao<String> {
+public class RybolovlevAlexeyPersistentDao<T> implements Dao<T> {
     private static final String UPSERT_ACTION = "upsert";
     private static final String REMOVE_ACTION = "remove";
 
-    private final Map<String, String> storage = new ConcurrentHashMap<>();
     private final Path filePath;
+    private final Map<String, T> storage = new ConcurrentHashMap<>();
+    private final Serializer<T> serializer;
 
-    public RybolovlevAlexeyPersistentDao(Path filePath) throws IOException {
+    public RybolovlevAlexeyPersistentDao(Path filePath, Serializer<T> serializer) throws IOException {
+        this.serializer = serializer;
+
         this.filePath = filePath;
 
         Files.createDirectories(this.filePath.getParent());
@@ -38,8 +34,16 @@ public class RybolovlevAlexeyPersistentDao implements Dao<String> {
         load();
     }
 
+    public static RybolovlevAlexeyPersistentDao<String> stringBased(Path filePath) throws IOException {
+        return new RybolovlevAlexeyPersistentDao<>(filePath, new PropertiesSerializer());
+    }
+
+    public static RybolovlevAlexeyPersistentDao<byte[]> bytesBased(Path filePath) throws IOException {
+        return new RybolovlevAlexeyPersistentDao<>(filePath, new BytesSerializer());
+    }
+
     @Override
-    public String get(String key) throws NoSuchElementException, IllegalArgumentException, IOException {
+    public T get(String key) throws NoSuchElementException, IllegalArgumentException, IOException {
         final var value = storage.get(key);
         if (value == null) {
             throw new NoSuchElementException("no value for key: " + key);
@@ -48,9 +52,9 @@ public class RybolovlevAlexeyPersistentDao implements Dao<String> {
     }
 
     @Override
-    public void upsert(String key, String value) throws IllegalArgumentException, IOException {
+    public void upsert(String key, T value) throws IllegalArgumentException, IOException {
         storage.put(key, value);
-        save(String.format("%s;%s;%s", UPSERT_ACTION, key, value));
+        save(String.format("%s;%s;%s", UPSERT_ACTION, key, serializer.serialize(value)));
     }
 
     @Override
@@ -65,7 +69,7 @@ public class RybolovlevAlexeyPersistentDao implements Dao<String> {
     }
 
     private void save(String action) throws IOException {
-        Files.writeString(filePath,action + System.lineSeparator(),
+        Files.writeString(filePath, action + System.lineSeparator(),
                 StandardCharsets.UTF_8, StandardOpenOption.APPEND);
     }
 
@@ -76,15 +80,44 @@ public class RybolovlevAlexeyPersistentDao implements Dao<String> {
 
         List<String> lines = Files.readAllLines(this.filePath);
 
-        for (String line: lines) {
+        for (String line : lines) {
             String[] terms = line.split(";");
 
             if (Objects.equals(UPSERT_ACTION, terms[0])) {
-                storage.put(terms[1], terms[2]);
-            }
-            if (Objects.equals(REMOVE_ACTION, terms[0])) {
+                storage.put(terms[1], serializer.deserialize(terms[2]));
+            } else if (Objects.equals(REMOVE_ACTION, terms[0])) {
                 storage.remove(terms[1]);
             }
+        }
+    }
+
+    public interface Serializer<T> {
+        String serialize(T value);
+
+        T deserialize(String value);
+    }
+
+    public static final class PropertiesSerializer implements Serializer<String> {
+        @Override
+        public String serialize(String value) {
+            return value;
+        }
+
+        @Override
+        public String deserialize(String value) {
+            return value;
+        }
+    }
+
+    public static final class BytesSerializer implements Serializer<byte[]> {
+        @Override
+        public String serialize(byte[] value) {
+            return java.util.Base64.getEncoder().encodeToString(value);
+        }
+
+        @Override
+        public byte[] deserialize(String value) {
+            return java.util.Base64.getDecoder().decode(value);
         }
     }
 }
