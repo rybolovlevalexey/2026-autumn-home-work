@@ -20,7 +20,7 @@ public class RybAlexeyKv implements KVService {
     private static final String METHOD_PUT = "PUT";
     private static final String METHOD_DELETE = "DELETE";
 
-    private static final String LINK_ENTITY_V0 = "/v0/entity/";
+    private static final String LINK_ENTITY_V0 = "/v0/entity";
     private static final String LINK_STATUS_V0 = "/v0/status";
 
     private final HttpServer server;
@@ -52,11 +52,18 @@ public class RybAlexeyKv implements KVService {
     }
 
     private HttpHandler entityHandler() {
+        final var uriMinPartsCount = 2;
         log.info("Creating of entityHandler");
         return httpExchange -> {
             var method = httpExchange.getRequestMethod();
             final var path = httpExchange.getRequestURI().getPath();
-            final var entityID = path.substring(LINK_ENTITY_V0.length());
+            final String uriStr = httpExchange.getRequestURI().toString();
+            if (uriStr.split("id=").length < uriMinPartsCount) {
+                httpExchange.sendResponseHeaders(400, 0);
+                httpExchange.close();
+                return;
+            }
+            final var entityID = uriStr.split("id=")[1];
             log.info("Received request at {} with method {} and entityID {}", path, method, entityID);
 
             if (entityID.isEmpty()) {

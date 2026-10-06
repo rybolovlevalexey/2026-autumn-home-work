@@ -12,8 +12,6 @@ public class RybAlexeyRemoteDaoFactory implements RemoteDaoFactory<String> {
     @Override
     public Dao<String> create(int... ports) throws IOException {
         final var port = ports[0];
-        final var kvServer = new RybAlexeyKv(port);
-        kvServer.start();
         return new RybAlexeyRemoteDao(HttpClient.newHttpClient(), port);
     }
 }

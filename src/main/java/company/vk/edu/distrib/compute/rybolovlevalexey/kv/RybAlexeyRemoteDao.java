@@ -73,6 +73,6 @@ public class RybAlexeyRemoteDao implements Dao<String> {
     }
 
     private URI uri(String key) {
-        return URI.create(String.format("http://localhost:%d%s/%s", port, PATH_ENTITY_V0, key));
+        return URI.create(String.format("http://localhost:%d%s?id=%s", port, PATH_ENTITY_V0, key));
     }
 }
