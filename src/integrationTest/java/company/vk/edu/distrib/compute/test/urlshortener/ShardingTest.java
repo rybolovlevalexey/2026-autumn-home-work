@@ -2,14 +2,9 @@ package company.vk.edu.distrib.compute.test.urlshortener;
 
 import company.vk.edu.distrib.compute.AbstractHttpServiceFactory;
 import company.vk.edu.distrib.compute.Dao;
-import company.vk.edu.distrib.compute.HttpService;
 import company.vk.edu.distrib.compute.iizhukov.urlshortener.api.helpers.HttpStatus;
-import company.vk.edu.distrib.compute.kv.ClusterDaoFactoryTest;
-import company.vk.edu.distrib.compute.kv.KVService;
-import company.vk.edu.distrib.compute.kv.KVServiceTest;
 import company.vk.edu.distrib.compute.kv.RemoteDaoFactory;
 import company.vk.edu.distrib.compute.urlshortener.UrlShortenerService;
-import company.vk.edu.distrib.compute.urlshortener.UrlShortenerTest;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -17,7 +12,6 @@ import org.junit.jupiter.params.Parameter;
 import org.junit.jupiter.params.ParameterizedClass;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
-import org.junit.platform.commons.util.ReflectionUtils;
 import org.junitpioneer.jupiter.RetryingTest;
 
 import java.io.IOException;
@@ -25,27 +19,25 @@ import java.net.BindException;
 import java.net.http.HttpClient;
 import java.net.http.HttpResponse;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Stream;
 
-import static company.vk.edu.distrib.compute.test.AbstractArgumentsProvider.findAnnotatedFactories;
 import static company.vk.edu.distrib.compute.test.TestUtils.*;
 import static company.vk.edu.distrib.compute.test.urlshortener.LinksApiTest.createLink;
 import static company.vk.edu.distrib.compute.test.urlshortener.LinksApiTest.getLinks;
-import static company.vk.edu.distrib.compute.test.urlshortener.RemoteDaoLinksTest.groupByPackageName;
+import static company.vk.edu.distrib.compute.test.urlshortener.RemoteDaoLinksTest.serviceDaoPairs;
 import static org.junit.jupiter.api.Assertions.*;
 
 @ParameterizedClass(allowZeroInvocations = true)
 @MethodSource("createServiceDaoPairs")
-@EnabledIfEnvironmentVariable(named = "CURRENT_DATE", matches = "2026-(10-07|10-08|10-09|10-10|10-11|10-12|10-13|10-14)")
+@EnabledIfEnvironmentVariable(named = "CURRENT_DATE", matches = "2026-(10-06|10-07|10-08|10-09|10-10|10-11|10-12|10-13|10-14)")
 public class ShardingTest {
     private static final int CLUSTER_SIZE = 2;
     public static final String TEST_LINK_ID = "10db3750xY";
     public static final String TEST_LINK_ID_2 = "20db3750xY";
     public static final String TEST_LONG_LINK = "https://ya.ru/search/?text=test";
     public static final String TEST_LONG_LINK_2 = "https://ya.ru/search/?text=test2";
-    private static final String ENTITY_PATH = "/v0/entity";
+    private static final String ENTITY_PATH = "/v0/entity/";
 
     private static final HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
 
@@ -53,9 +45,6 @@ public class ShardingTest {
     AbstractHttpServiceFactory<? extends UrlShortenerService> serviceFactory;
 
     @Parameter(1)
-    AbstractHttpServiceFactory<? extends KVService> kvServiceFactory;
-
-    @Parameter(2)
     RemoteDaoFactory<String> remoteDaoFactory;
 
     int port;
@@ -66,18 +55,15 @@ public class ShardingTest {
 
     Dao<String> remoteDao;
 
-    KVService[] clusterNodes = new KVService[CLUSTER_SIZE];
-
     @BeforeEach
     void setup() throws IOException {
+        this.port = randomPort();
 
         for (int i = 0; i < CLUSTER_SIZE; i++) {
             this.remotePorts[i] = randomPort();
-            this.clusterNodes[i] = kvServiceFactory.create(this.remotePorts[i]);
         }
 
-        this.port = randomPort(remotePorts);
-        this.service = serviceFactory.create(port);
+        this.service = serviceFactory.create(randomPort());
         this.remoteDao = remoteDaoFactory.create(remotePorts);
         service.setLinksDao(remoteDao);
     }
@@ -91,7 +77,6 @@ public class ShardingTest {
     void fullFlowShouldWork() {
         assertTimeoutPreemptively(TIMEOUT, () -> {
             try {
-                startCluster();
                 service.start();
                 runHttpCtx(HTTP_CLIENT, port, () -> {
                     tryCreateTestUser();
@@ -114,7 +99,6 @@ public class ShardingTest {
                 });
             } finally {
                 service.stop();
-                stopCluster();
             }
         });
     }
@@ -123,7 +107,6 @@ public class ShardingTest {
     void shouldFollowSameNodeWithSameId() {
         assertTimeoutPreemptively(TIMEOUT, () -> {
             try {
-                startCluster();
                 remoteDao.delete(TEST_LINK_ID);
 
                 assertDoesNotThrow(() -> remoteDao.upsert(TEST_LINK_ID, TEST_LONG_LINK));
@@ -142,7 +125,7 @@ public class ShardingTest {
                 assertDoesNotThrow(() -> remoteDao.delete(TEST_LINK_ID));
                 assertTrue(findNodesOwningId(TEST_LINK_ID).isEmpty());
             } finally {
-                stopCluster();
+                service.stop();
             }
         });
     }
@@ -151,7 +134,6 @@ public class ShardingTest {
     void shouldFollowDifferentNodes() {
         assertTimeoutPreemptively(TIMEOUT, () -> {
             try {
-                startCluster();
                 remoteDao.delete(TEST_LINK_ID);
                 remoteDao.delete(TEST_LINK_ID_2);
 
@@ -169,25 +151,16 @@ public class ShardingTest {
 
                 assertFalse(nodesOwningId.removeAll(nodesOwningId2));
             } finally {
-                stopCluster();
+                service.stop();
             }
         });
-    }
-
-    private void startCluster() {
-        Arrays.stream(clusterNodes).forEach(HttpService::start);
-    }
-
-    private void stopCluster() {
-        Arrays.stream(clusterNodes).forEach(HttpService::stop);
     }
 
     private List<Integer> findNodesOwningId(String id) {
         List<Integer> idNodes = new ArrayList<>();
         for (int remotePort : remotePorts) {
             runHttpCtx(HTTP_CLIENT, remotePort, () -> {
-                HttpResponse<String> stringHttpResponse = get(ENTITY_PATH + "?id=" + id);
-                if (stringHttpResponse.statusCode() == HttpStatus.OK.code()) {
+                if (get(ENTITY_PATH + id).statusCode() == HttpStatus.OK.code()) {
                     idNodes.add(remotePort);
                 }
             });
@@ -196,14 +169,6 @@ public class ShardingTest {
     }
 
     static Stream<Arguments> createServiceDaoPairs() {
-        var urlShortenerServiceFactories = groupByPackageName(findAnnotatedFactories(UrlShortenerTest.class));
-        var kvServiceFactories = groupByPackageName(findAnnotatedFactories(KVServiceTest.class));
-        var remoteDaoFactories = groupByPackageName(findAnnotatedFactories(ClusterDaoFactoryTest.class));
-        return urlShortenerServiceFactories.entrySet().stream()
-                .filter(it -> kvServiceFactories.containsKey(it.getKey()) && remoteDaoFactories.containsKey(it.getKey()))
-                .map(it -> Arguments.of(
-                        ReflectionUtils.newInstance(it.getValue()),
-                        ReflectionUtils.newInstance(kvServiceFactories.get(it.getKey())),
-                        ReflectionUtils.newInstance(remoteDaoFactories.get(it.getKey()))));
+        return serviceDaoPairs();
     }
 }
