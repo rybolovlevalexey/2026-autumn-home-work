@@ -3,6 +3,7 @@ package company.vk.edu.distrib.compute.test.urlshortener;
 import company.vk.edu.distrib.compute.AbstractHttpServiceFactory;
 import company.vk.edu.distrib.compute.Dao;
 import company.vk.edu.distrib.compute.iizhukov.urlshortener.api.helpers.HttpStatus;
+import company.vk.edu.distrib.compute.kv.KVService;
 import company.vk.edu.distrib.compute.kv.RemoteDaoFactory;
 import company.vk.edu.distrib.compute.urlshortener.UrlShortenerService;
 import org.junit.jupiter.api.AfterAll;
@@ -30,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @ParameterizedClass(allowZeroInvocations = true)
 @MethodSource("createServiceDaoPairs")
-@EnabledIfEnvironmentVariable(named = "CURRENT_DATE", matches = "2026-(10-06|10-07|10-08|10-09|10-10|10-11|10-12|10-13|10-14)")
+@EnabledIfEnvironmentVariable(named = "CURRENT_DATE", matches = "2026-(10-07|10-08|10-09|10-10|10-11|10-12|10-13|10-14)")
 public class ShardingTest {
     private static final int CLUSTER_SIZE = 2;
     public static final String TEST_LINK_ID = "10db3750xY";
@@ -45,6 +46,9 @@ public class ShardingTest {
     AbstractHttpServiceFactory<? extends UrlShortenerService> serviceFactory;
 
     @Parameter(1)
+    AbstractHttpServiceFactory<? extends KVService> kvServiceFactory;
+
+    @Parameter(2)
     RemoteDaoFactory<String> remoteDaoFactory;
 
     int port;
@@ -55,16 +59,19 @@ public class ShardingTest {
 
     Dao<String> remoteDao;
 
+    KVService kvService;
+
     @BeforeEach
     void setup() throws IOException {
-        this.port = randomPort();
 
         for (int i = 0; i < CLUSTER_SIZE; i++) {
             this.remotePorts[i] = randomPort();
         }
 
-        this.service = serviceFactory.create(randomPort());
+        this.port = randomPort(remotePorts);
+        this.service = serviceFactory.create(port);
         this.remoteDao = remoteDaoFactory.create(remotePorts);
+        this.kvService = kvServiceFactory.create(randomPort(remotePorts));
         service.setLinksDao(remoteDao);
     }
 
