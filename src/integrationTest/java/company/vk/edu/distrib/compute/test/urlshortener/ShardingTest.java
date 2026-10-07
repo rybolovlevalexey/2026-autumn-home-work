@@ -3,9 +3,12 @@ package company.vk.edu.distrib.compute.test.urlshortener;
 import company.vk.edu.distrib.compute.AbstractHttpServiceFactory;
 import company.vk.edu.distrib.compute.Dao;
 import company.vk.edu.distrib.compute.iizhukov.urlshortener.api.helpers.HttpStatus;
+import company.vk.edu.distrib.compute.kv.ClusterDaoFactoryTest;
 import company.vk.edu.distrib.compute.kv.KVService;
+import company.vk.edu.distrib.compute.kv.KVServiceTest;
 import company.vk.edu.distrib.compute.kv.RemoteDaoFactory;
 import company.vk.edu.distrib.compute.urlshortener.UrlShortenerService;
+import company.vk.edu.distrib.compute.urlshortener.UrlShortenerTest;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -13,6 +16,7 @@ import org.junit.jupiter.params.Parameter;
 import org.junit.jupiter.params.ParameterizedClass;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.platform.commons.util.ReflectionUtils;
 import org.junitpioneer.jupiter.RetryingTest;
 
 import java.io.IOException;
@@ -23,10 +27,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Stream;
 
+import static company.vk.edu.distrib.compute.test.AbstractArgumentsProvider.findAnnotatedFactories;
 import static company.vk.edu.distrib.compute.test.TestUtils.*;
 import static company.vk.edu.distrib.compute.test.urlshortener.LinksApiTest.createLink;
 import static company.vk.edu.distrib.compute.test.urlshortener.LinksApiTest.getLinks;
-import static company.vk.edu.distrib.compute.test.urlshortener.RemoteDaoLinksTest.serviceDaoPairs;
+import static company.vk.edu.distrib.compute.test.urlshortener.RemoteDaoLinksTest.groupByPackageName;
 import static org.junit.jupiter.api.Assertions.*;
 
 @ParameterizedClass(allowZeroInvocations = true)
@@ -176,6 +181,14 @@ public class ShardingTest {
     }
 
     static Stream<Arguments> createServiceDaoPairs() {
-        return serviceDaoPairs();
+        var urlShortenerServiceFactories = groupByPackageName(findAnnotatedFactories(UrlShortenerTest.class));
+        var kvServiceFactories = groupByPackageName(findAnnotatedFactories(KVServiceTest.class));
+        var remoteDaoFactories = groupByPackageName(findAnnotatedFactories(ClusterDaoFactoryTest.class));
+        return urlShortenerServiceFactories.entrySet().stream()
+                .filter(it -> kvServiceFactories.containsKey(it.getKey()) && remoteDaoFactories.containsKey(it.getKey()))
+                .map(it -> Arguments.of(
+                        ReflectionUtils.newInstance(it.getValue()),
+                        ReflectionUtils.newInstance(kvServiceFactories.get(it.getKey())),
+                        ReflectionUtils.newInstance(remoteDaoFactories.get(it.getKey()))));
     }
 }
