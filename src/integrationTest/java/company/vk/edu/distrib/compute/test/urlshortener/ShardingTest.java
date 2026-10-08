@@ -2,6 +2,7 @@ package company.vk.edu.distrib.compute.test.urlshortener;
 
 import company.vk.edu.distrib.compute.AbstractHttpServiceFactory;
 import company.vk.edu.distrib.compute.Dao;
+import company.vk.edu.distrib.compute.HttpService;
 import company.vk.edu.distrib.compute.iizhukov.urlshortener.api.helpers.HttpStatus;
 import company.vk.edu.distrib.compute.kv.ClusterDaoFactoryTest;
 import company.vk.edu.distrib.compute.kv.KVService;
@@ -24,6 +25,7 @@ import java.net.BindException;
 import java.net.http.HttpClient;
 import java.net.http.HttpResponse;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Stream;
 
@@ -43,7 +45,7 @@ public class ShardingTest {
     public static final String TEST_LINK_ID_2 = "20db3750xY";
     public static final String TEST_LONG_LINK = "https://ya.ru/search/?text=test";
     public static final String TEST_LONG_LINK_2 = "https://ya.ru/search/?text=test2";
-    private static final String ENTITY_PATH = "/v0/entity/";
+    private static final String ENTITY_PATH = "/v0/entity";
 
     private static final HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
 
@@ -64,19 +66,19 @@ public class ShardingTest {
 
     Dao<String> remoteDao;
 
-    KVService kvService;
+    KVService[] clusterNodes = new KVService[CLUSTER_SIZE];
 
     @BeforeEach
     void setup() throws IOException {
 
         for (int i = 0; i < CLUSTER_SIZE; i++) {
             this.remotePorts[i] = randomPort();
+            this.clusterNodes[i] = kvServiceFactory.create(this.remotePorts[i]);
         }
 
         this.port = randomPort(remotePorts);
         this.service = serviceFactory.create(port);
         this.remoteDao = remoteDaoFactory.create(remotePorts);
-        this.kvService = kvServiceFactory.create(randomPort(remotePorts));
         service.setLinksDao(remoteDao);
     }
 
@@ -89,6 +91,7 @@ public class ShardingTest {
     void fullFlowShouldWork() {
         assertTimeoutPreemptively(TIMEOUT, () -> {
             try {
+                startCluster();
                 service.start();
                 runHttpCtx(HTTP_CLIENT, port, () -> {
                     tryCreateTestUser();
@@ -111,6 +114,7 @@ public class ShardingTest {
                 });
             } finally {
                 service.stop();
+                stopCluster();
             }
         });
     }
@@ -119,6 +123,7 @@ public class ShardingTest {
     void shouldFollowSameNodeWithSameId() {
         assertTimeoutPreemptively(TIMEOUT, () -> {
             try {
+                startCluster();
                 remoteDao.delete(TEST_LINK_ID);
 
                 assertDoesNotThrow(() -> remoteDao.upsert(TEST_LINK_ID, TEST_LONG_LINK));
@@ -137,7 +142,7 @@ public class ShardingTest {
                 assertDoesNotThrow(() -> remoteDao.delete(TEST_LINK_ID));
                 assertTrue(findNodesOwningId(TEST_LINK_ID).isEmpty());
             } finally {
-                service.stop();
+                stopCluster();
             }
         });
     }
@@ -146,6 +151,7 @@ public class ShardingTest {
     void shouldFollowDifferentNodes() {
         assertTimeoutPreemptively(TIMEOUT, () -> {
             try {
+                startCluster();
                 remoteDao.delete(TEST_LINK_ID);
                 remoteDao.delete(TEST_LINK_ID_2);
 
@@ -163,16 +169,25 @@ public class ShardingTest {
 
                 assertFalse(nodesOwningId.removeAll(nodesOwningId2));
             } finally {
-                service.stop();
+                stopCluster();
             }
         });
+    }
+
+    private void startCluster() {
+        Arrays.stream(clusterNodes).forEach(HttpService::start);
+    }
+
+    private void stopCluster() {
+        Arrays.stream(clusterNodes).forEach(HttpService::stop);
     }
 
     private List<Integer> findNodesOwningId(String id) {
         List<Integer> idNodes = new ArrayList<>();
         for (int remotePort : remotePorts) {
             runHttpCtx(HTTP_CLIENT, remotePort, () -> {
-                if (get(ENTITY_PATH + id).statusCode() == HttpStatus.OK.code()) {
+                HttpResponse<String> stringHttpResponse = get(ENTITY_PATH + "?id=" + id);
+                if (stringHttpResponse.statusCode() == HttpStatus.OK.code()) {
                     idNodes.add(remotePort);
                 }
             });
