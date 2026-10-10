@@ -158,7 +158,6 @@ public class RybolovlevAlexeyUrlShortenerService implements UrlShortenerService 
         }
     }
 
-
     @Override
     public void setLinksDao(Dao<String> dao) {
         this.dao = Objects.requireNonNull(dao);
