@@ -14,6 +14,8 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.NoSuchElementException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class RybAlexeyKv implements KVService {
     private static final String METHOD_GET = "GET";
@@ -25,10 +27,15 @@ public class RybAlexeyKv implements KVService {
 
     private final HttpServer server;
     private final Dao<byte[]> dao;
+    private final ExecutorService executor;
     private static final Logger log = LoggerFactory.getLogger(RybAlexeyKv.class);
 
     public RybAlexeyKv(int port) throws IOException {
         this.server = HttpServer.create(new InetSocketAddress(port), 0);
+
+        final var threadPoolSize = 8;
+        this.executor = Executors.newFixedThreadPool(threadPoolSize);
+        this.server.setExecutor(this.executor);
 
         final Path dataDir = Path.of(System.getProperty("java.io.tmpdir"), "rybolovlevalexey-kv-data");
         this.dao = RybolovlevAlexeyPersistentDao.bytesBased(dataDir.resolve("entity-" + port + ".properties"));
@@ -147,6 +154,7 @@ public class RybAlexeyKv implements KVService {
     @Override
     public void stop() {
         this.server.stop(1);
+        this.executor.shutdown();
     }
 
     private record ErrorHandler(HttpHandler delegate) implements HttpHandler {
