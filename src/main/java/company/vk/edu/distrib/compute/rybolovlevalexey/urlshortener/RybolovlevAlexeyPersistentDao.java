@@ -13,7 +13,6 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import company.vk.edu.distrib.compute.Dao;
 
-
 public class RybolovlevAlexeyPersistentDao<T> implements Dao<T> {
     private static final String UPSERT_ACTION = "upsert";
     private static final String REMOVE_ACTION = "remove";
