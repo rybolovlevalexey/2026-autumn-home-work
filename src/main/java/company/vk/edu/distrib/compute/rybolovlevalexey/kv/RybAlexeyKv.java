@@ -9,6 +9,7 @@ import company.vk.edu.distrib.compute.rybolovlevalexey.urlshortener.RybolovlevAl
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -22,6 +23,9 @@ public class RybAlexeyKv implements KVService {
 
     private static final String LINK_ENTITY_V0 = "/v0/entity";
     private static final String LINK_STATUS_V0 = "/v0/status";
+
+    private static final int MAX_BODY_SIZE = 1024 * 1024;
+    private static final int READ_BUFFER_SIZE = 8192;
 
     private final HttpServer server;
     private final Dao<byte[]> dao;
@@ -43,9 +47,9 @@ public class RybAlexeyKv implements KVService {
             log.info("Received request /v0/status");
             final var requestMethod = httpExchange.getRequestMethod();
             if (METHOD_GET.equals(requestMethod)) {
-                httpExchange.sendResponseHeaders(200, 0);
+                httpExchange.sendResponseHeaders(200, -1);
             } else {
-                httpExchange.sendResponseHeaders(405, 0);
+                httpExchange.sendResponseHeaders(405, -1);
             }
             httpExchange.close();
         };
@@ -58,16 +62,16 @@ public class RybAlexeyKv implements KVService {
             var method = httpExchange.getRequestMethod();
             final var path = httpExchange.getRequestURI().getPath();
             final String uriStr = httpExchange.getRequestURI().toString();
-            if (uriStr.split("id=").length < uriMinPartsCount) {
-                httpExchange.sendResponseHeaders(400, 0);
+            if (!uriStr.contains("\\?id=") || uriStr.split("\\?id=").length < uriMinPartsCount) {
+                httpExchange.sendResponseHeaders(400, -1);
                 httpExchange.close();
                 return;
             }
-            final var entityID = uriStr.split("id=")[1];
+            final var entityID = uriStr.split("\\?id=")[1];
             log.info("Received request at {} with method {} and entityID {}", path, method, entityID);
 
             if (entityID.isEmpty()) {
-                httpExchange.sendResponseHeaders(400, 0);
+                httpExchange.sendResponseHeaders(400, -1);
                 httpExchange.close();
                 return;
             }
@@ -77,18 +81,39 @@ public class RybAlexeyKv implements KVService {
                     getEntityHandler(httpExchange, entityID);
                     break;
                 case METHOD_PUT:
-                    byte[] body = httpExchange.getRequestBody().readAllBytes();
-                    putEntityHandler(httpExchange, entityID, body);
+                    try {
+                        byte[] body = readBodyWithLimit(httpExchange);
+                        putEntityHandler(httpExchange, entityID, body);
+                    } catch (BodyTooLargeException e) {
+                        httpExchange.sendResponseHeaders(400, -1);
+                        log.info("PUT for entityID {} rejected: body too large", entityID);
+                        httpExchange.close();
+                    }
                     break;
                 case METHOD_DELETE:
                     deleteEntityHandler(httpExchange, entityID);
                     break;
                 default:
-                    httpExchange.sendResponseHeaders(405, 0);
+                    httpExchange.sendResponseHeaders(405, -1);
                     httpExchange.close();
                     break;
             }
         };
+    }
+
+    private byte[] readBodyWithLimit(HttpExchange httpExchange) throws IOException {
+        final var in = httpExchange.getRequestBody();
+        final var out = new ByteArrayOutputStream();
+        final byte[] buffer = new byte[READ_BUFFER_SIZE];
+        int read = 0;
+        while (read != -1) {
+            read = in.read(buffer);
+            if (out.size() + read > MAX_BODY_SIZE) {
+                throw new BodyTooLargeException();
+            }
+            out.write(buffer, 0, read);
+        }
+        return out.toByteArray();
     }
 
     private void getEntityHandler(HttpExchange httpExchange, String entityID) throws IOException {
@@ -102,10 +127,10 @@ public class RybAlexeyKv implements KVService {
 
             log.info("getEntityHandler for entityID {} 200 and body {}", entityID, entityResult);
         } catch (IllegalArgumentException e) {
-            httpExchange.sendResponseHeaders(422, 0);
+            httpExchange.sendResponseHeaders(422, -1);
             log.info("getEntityHandler for entityID {} 422", entityID);
         } catch (NoSuchElementException e) {
-            httpExchange.sendResponseHeaders(404, 0);
+            httpExchange.sendResponseHeaders(404, -1);
             log.info("getEntityHandler for entityID {} 404", entityID);
         }
         httpExchange.close();
@@ -115,11 +140,11 @@ public class RybAlexeyKv implements KVService {
         log.info("Using putEntityHandler with entityID {} and body {}", entityID, body);
         try {
             dao.upsert(entityID, body);
-            httpExchange.sendResponseHeaders(201, 0);
+            httpExchange.sendResponseHeaders(201, -1);
             log.info("putEntityHandler for entityID {} 201", entityID);
             httpExchange.close();
         } catch (IllegalArgumentException e) {
-            httpExchange.sendResponseHeaders(422, 0);
+            httpExchange.sendResponseHeaders(422, -1);
             log.info("putEntityHandler for entityID {} 422", entityID);
             httpExchange.close();
         }
@@ -129,11 +154,11 @@ public class RybAlexeyKv implements KVService {
         log.info("Using deleteEntityHandler with entityID {}", entityID);
         try {
             dao.delete(entityID);
-            httpExchange.sendResponseHeaders(202, 0);
+            httpExchange.sendResponseHeaders(202, -1);
             log.info("deleteEntityHandler for entityID {} 202", entityID);
             httpExchange.close();
         } catch (IllegalArgumentException e) {
-            httpExchange.sendResponseHeaders(422, 0);
+            httpExchange.sendResponseHeaders(422, -1);
             log.info("deleteEntityHandler for entityID {} 422", entityID);
             httpExchange.close();
         }
@@ -149,6 +174,10 @@ public class RybAlexeyKv implements KVService {
         this.server.stop(1);
     }
 
+    private static final class BodyTooLargeException extends IOException {
+        private static final long serialVersionUID = 1L;
+    }
+
     private record ErrorHandler(HttpHandler delegate) implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
@@ -156,12 +185,14 @@ public class RybAlexeyKv implements KVService {
                 delegate.handle(exchange);
             } catch (IllegalArgumentException e) {
                 final var message = e.getMessage();
-                exchange.sendResponseHeaders(422, message.length());
-                exchange.getResponseBody().write(message.getBytes(StandardCharsets.UTF_8));
+                final var body = message.getBytes(StandardCharsets.UTF_8);
+                exchange.sendResponseHeaders(422, body.length);
+                exchange.getResponseBody().write(body);
             } catch (Exception e) {
                 final var message = e.getMessage();
-                exchange.sendResponseHeaders(500, message.length());
-                exchange.getResponseBody().write(message.getBytes(StandardCharsets.UTF_8));
+                final var body = message.getBytes(StandardCharsets.UTF_8);
+                exchange.sendResponseHeaders(500, body.length);
+                exchange.getResponseBody().write(body);
             }
             exchange.close();
         }
