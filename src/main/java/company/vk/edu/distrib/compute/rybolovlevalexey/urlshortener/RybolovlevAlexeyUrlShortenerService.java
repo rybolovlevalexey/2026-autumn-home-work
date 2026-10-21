@@ -28,18 +28,17 @@ public class RybolovlevAlexeyUrlShortenerService implements UrlShortenerService 
     private final int port;
     private final HttpServer server;
     private static final Logger log = LoggerFactory.getLogger(RybolovlevAlexeyUrlShortenerService.class);
-    private final Dao<String> dao;
+
+    private Dao<String> dao;
     private final Dao<String> authDao;
     private final ShortLinkIDGenerator shortLinkGenerator = new ShortLinkIDGenerator(10);
 
     public RybolovlevAlexeyUrlShortenerService(int port) throws IOException {
         this.port = port;
         this.server = HttpServer.create(new InetSocketAddress(port), 0);
-        // используются захардкоженные названия файлов, чтобы не заморачиваться
-        // можно добавить как параметры инициализации
-        final Path dataDir = Path.of(System.getProperty("java.io.tmpdir"), "rybolovlevalexey-data");
-        this.dao = new RybolovlevAlexeyPersistentDao(dataDir.resolve("links.properties"));
-        this.authDao = new RybolovlevAlexeyPersistentDao(dataDir.resolve("users.properties"));
+        final Path dataDir = Path.of(System.getProperty("java.io.tmpdir"), "rybolovlevalexey-kv-data");
+        this.dao = RybolovlevAlexeyPersistentDao.stringBased(dataDir.resolve("links.properties"));
+        this.authDao = RybolovlevAlexeyPersistentDao.stringBased(dataDir.resolve("users.properties"));
 
         server.createContext("/v0/status", new ErrorHandler(statusHandler()));
         server.createContext("/v0/links", new ErrorHandler(linksHandler()));
@@ -157,6 +156,11 @@ public class RybolovlevAlexeyUrlShortenerService implements UrlShortenerService 
         } catch (IOException e) {
             log.error("Failed to save data on stop", e);
         }
+    }
+
+    @Override
+    public void setLinksDao(Dao<String> dao) {
+        this.dao = Objects.requireNonNull(dao);
     }
 
     private boolean checkAuth(HttpExchange httpExchange) {
