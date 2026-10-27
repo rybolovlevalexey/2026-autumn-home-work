@@ -12,6 +12,7 @@ import org.slf4j.LoggerFactory;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.Serial;
+import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -23,6 +24,7 @@ import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.locks.ReentrantLock;
 
 public class RybAlexeyKv implements KVService {
     private static final String METHOD_GET = "GET";
@@ -44,6 +46,7 @@ public class RybAlexeyKv implements KVService {
     private final int port;
     private final HttpClient client;
     private boolean hashInitialized;
+    private final ReentrantLock hashLock = new ReentrantLock();
 
     public RybAlexeyKv(int port) throws IOException {
         this.server = HttpServer.create(new InetSocketAddress(port), 0);
@@ -126,7 +129,11 @@ public class RybAlexeyKv implements KVService {
         final var out = new ByteArrayOutputStream();
         final byte[] buffer = new byte[READ_BUFFER_SIZE];
         int read;
-        while ((read = in.read(buffer)) != -1) {
+        while (true) {
+            read = in.read(buffer);
+            if (read == -1) {
+                break;
+            }
             if (out.size() + read > MAX_BODY_SIZE) {
                 throw new BodyTooLargeException();
             }
@@ -267,10 +274,11 @@ public class RybAlexeyKv implements KVService {
                             "http://localhost:" + nodePort + "/v0/entity/replica?id="
                                     + entityID)).GET().build(),
                     HttpResponse.BodyHandlers.ofByteArray());
-            if (resp.statusCode() == 200) {
+            var respStatuCode = resp.statusCode();
+            if (respStatuCode == HttpURLConnection.HTTP_OK) {
                 found = resp.body();
                 answered += 1;
-            } else if (resp.statusCode() == 404) {
+            } else if (respStatuCode == HttpURLConnection.HTTP_NOT_FOUND) {
                 answered += 1;
             }
         } catch (Exception e) {
@@ -316,7 +324,8 @@ public class RybAlexeyKv implements KVService {
                             "http://localhost:" + nodePort + "/v0/entity/replica?id="
                                     + entityID)).PUT(postBody).build(),
                     HttpResponse.BodyHandlers.ofByteArray());
-            if (resp.statusCode() == 201) {
+            var respStatusCode = resp.statusCode();
+            if (respStatusCode == HttpURLConnection.HTTP_CREATED) {
                 return 1;
             }
         } catch (Exception e) {
@@ -361,7 +370,8 @@ public class RybAlexeyKv implements KVService {
                             "http://localhost:" + nodePort + "/v0/entity/replica?id="
                                     + entityID)).DELETE().build(),
                     HttpResponse.BodyHandlers.ofByteArray());
-            if (resp.statusCode() == 202) {
+            var respStatusCode = resp.statusCode();
+            if (respStatusCode == HttpURLConnection.HTTP_ACCEPTED) {
                 return 1;
             }
         } catch (Exception e) {
@@ -370,12 +380,17 @@ public class RybAlexeyKv implements KVService {
         return 0;
     }
 
-    private synchronized void ensureHashInitialized() {
-        if (!hashInitialized) {
-            for (Integer port : clusterPorts()) {
-                hash.add(port);
+    private void ensureHashInitialized() {
+        hashLock.lock();
+        try {
+            if (!hashInitialized) {
+                for (Integer port : clusterPorts()) {
+                    hash.add(port);
+                }
+                hashInitialized = true;
             }
-            hashInitialized = true;
+        } finally {
+            hashLock.unlock();
         }
     }
 
