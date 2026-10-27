@@ -17,7 +17,6 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -84,15 +83,15 @@ public class RybAlexeyKv implements KVService {
 
             final var path = httpExchange.getRequestURI().getPath();
             final String uriStr = httpExchange.getRequestURI().toString();
-            var entityParams = parseEntityHandlerParams(uriStr, clusterPorts.size());
-            if (entityParams.badRequest) {
+            var entityParams = RequestParserUtils.parseEntityHandlerParams(uriStr, clusterPorts.size());
+            if (entityParams.badRequest()) {
                 httpExchange.sendResponseHeaders(400, -1);
                 httpExchange.close();
                 return;
             }
 
-            var entityID = entityParams.entityID;
-            var ack = entityParams.ack;
+            var entityID = entityParams.entityID();
+            var ack = entityParams.ack();
             var method = httpExchange.getRequestMethod();
             log.info("Received request at {} with method {} and params: entityID {}, ack {}",
                     path, method, entityID, ack);
@@ -121,54 +120,6 @@ public class RybAlexeyKv implements KVService {
             }
         };
     }
-
-    private EntityParams parseEntityHandlerParams(String uriStr, int clusterNodesCount) {
-        String entityID = "";
-        String ackStr = "";
-
-        try {
-            var pathParams = uriStr.split("\\?")[1].split("&");
-            for (String pathParam : pathParams) {
-                var keyValue = pathParam.split("=");
-                if (!(keyValue.length == 2 || keyValue.length == 1 && "ack".equals(keyValue[0]))) {
-                    return new EntityParams("", -1, true);
-                }
-
-                switch (keyValue[0]) {
-                    case "id":
-                        entityID = keyValue[1];
-                        break;
-                    case "ack":
-                        ackStr = keyValue[1];
-                        break;
-                    default:
-                        break;
-                }
-            }
-        } catch (Exception e) {
-            return new EntityParams("", -1, true);
-        }
-
-        if (entityID.isEmpty()) {
-            return new EntityParams("", -1, true);
-        }
-
-        int ack = 1;
-        if (ackStr.isEmpty()){
-            return new EntityParams(entityID, ack, false);
-        }
-        try {
-            ack = Integer.parseInt(ackStr);
-        } catch (NumberFormatException e) {
-            return new EntityParams("", -1, true);
-        }
-        if (ack < 1 || ack > clusterNodesCount) {
-            return new EntityParams("", -1, true);
-        }
-        return new EntityParams(entityID, ack, false);
-    }
-
-    private record EntityParams(String entityID, int ack, boolean badRequest) {}
 
     private byte[] readBodyWithLimit(HttpExchange httpExchange) throws IOException {
         final var in = httpExchange.getRequestBody();
@@ -215,44 +166,48 @@ public class RybAlexeyKv implements KVService {
             }
 
             switch (method) {
-                case METHOD_GET:
-                    try {
-                        final byte[] value = dao.get(entityID);
-                        httpExchange.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
-                        httpExchange.sendResponseHeaders(200, value.length);
-                        httpExchange.getResponseBody().write(value);
-                    } catch (NoSuchElementException e) {
-                        httpExchange.sendResponseHeaders(404, -1);
-                    } catch (IllegalArgumentException e) {
-                        httpExchange.sendResponseHeaders(422, -1);
-                    }
-                    break;
-                case METHOD_PUT:
-                    try {
-                        byte[] body = readBodyWithLimit(httpExchange);
-                        dao.upsert(entityID, body);
-                        httpExchange.sendResponseHeaders(201, -1);
-                    } catch (BodyTooLargeException e) {
-                        httpExchange.sendResponseHeaders(400, -1);
-                    } catch (IllegalArgumentException e) {
-                        httpExchange.sendResponseHeaders(422, -1);
-                    }
-                    break;
-                case METHOD_DELETE:
-                    try {
-                        dao.delete(entityID);
-                        httpExchange.sendResponseHeaders(202, -1);
-                    } catch (IllegalArgumentException e) {
-                        httpExchange.sendResponseHeaders(422, -1);
-                    }
-                    break;
-                default:
-                    httpExchange.sendResponseHeaders(405, -1);
-                    break;
+                case METHOD_GET -> replicaEntityHandlerGet(httpExchange, entityID);
+                case METHOD_PUT -> replicaEntityHandlerPut(httpExchange, entityID);
+                case METHOD_DELETE -> replicaEntityHandlerDelete(httpExchange, entityID);
+                default -> httpExchange.sendResponseHeaders(405, -1);
             }
 
             httpExchange.close();
         };
+    }
+
+    private void replicaEntityHandlerGet(HttpExchange httpExchange, String entityID) throws IOException {
+        try {
+            final byte[] value = dao.get(entityID);
+            httpExchange.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
+            httpExchange.sendResponseHeaders(200, value.length);
+            httpExchange.getResponseBody().write(value);
+        } catch (NoSuchElementException e) {
+            httpExchange.sendResponseHeaders(404, -1);
+        } catch (IllegalArgumentException e) {
+            httpExchange.sendResponseHeaders(422, -1);
+        }
+    }
+
+    private void replicaEntityHandlerPut(HttpExchange httpExchange, String entityID) throws IOException {
+        try {
+            byte[] body = readBodyWithLimit(httpExchange);
+            dao.upsert(entityID, body);
+            httpExchange.sendResponseHeaders(201, -1);
+        } catch (BodyTooLargeException e) {
+            httpExchange.sendResponseHeaders(400, -1);
+        } catch (IllegalArgumentException e) {
+            httpExchange.sendResponseHeaders(422, -1);
+        }
+    }
+
+    private void replicaEntityHandlerDelete(HttpExchange httpExchange, String entityID) throws IOException {
+        try {
+            dao.delete(entityID);
+            httpExchange.sendResponseHeaders(202, -1);
+        } catch (IllegalArgumentException e) {
+            httpExchange.sendResponseHeaders(422, -1);
+        }
     }
 
     private void getEntityHandler(HttpExchange httpExchange, String entityID, int ack) throws IOException {
@@ -273,24 +228,22 @@ public class RybAlexeyKv implements KVService {
                     log.warn("Failed to get info from local port");
                 }
             } else {
-                try {
-                    var resp = client.send(HttpRequest.newBuilder(URI.create(
-                            "http://localhost:" + nodePort + "/v0/entity/replica?id="
-                                    + entityID)).GET().build(),
-                            HttpResponse.BodyHandlers.ofByteArray());
-                    if (resp.statusCode() == 200) {
-                        found = resp.body();
-                        answered += 1;
-                    } else if (resp.statusCode() == 404) {
-                        answered += 1;
-                    }
-                } catch (Exception e) {
-                    log.warn("Failed to get info from port {}", nodePort);
+                var replicaResp = getEntityHandlerRequestToReplica(nodePort, entityID);
+                answered += replicaResp.answered;
+                if (found == null) {
+                    found = replicaResp.body;
                 }
             }
         }
 
         log.info("ack {} answered {}", ack, answered);
+        getEntityHandlerCreateResponse(found, httpExchange, entityID, answered, ack);
+
+        httpExchange.close();
+    }
+
+    private void getEntityHandlerCreateResponse(
+            byte[] found, HttpExchange httpExchange, String entityID, int answered, int ack) throws IOException {
         if (found != null && answered >= ack) {
             httpExchange.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
             httpExchange.sendResponseHeaders(200, found.length);
@@ -301,8 +254,30 @@ public class RybAlexeyKv implements KVService {
         } else {
             httpExchange.sendResponseHeaders(503, -1);
         }
+    }
 
-        httpExchange.close();
+    private record GetReplicaResp(int answered, byte[] body) {}
+
+    private GetReplicaResp getEntityHandlerRequestToReplica(int nodePort, String entityID) {
+        int answered = 0;
+        byte[] found = null;
+
+        try {
+            var resp = client.send(HttpRequest.newBuilder(URI.create(
+                            "http://localhost:" + nodePort + "/v0/entity/replica?id="
+                                    + entityID)).GET().build(),
+                    HttpResponse.BodyHandlers.ofByteArray());
+            if (resp.statusCode() == 200) {
+                found = resp.body();
+                answered += 1;
+            } else if (resp.statusCode() == 404) {
+                answered += 1;
+            }
+        } catch (Exception e) {
+            log.warn("Failed to get info from port {}", nodePort);
+        }
+
+        return new GetReplicaResp(answered, found);
     }
 
     private void putEntityHandler(HttpExchange httpExchange, String entityID, byte[] body, int ack) throws IOException {
@@ -322,18 +297,7 @@ public class RybAlexeyKv implements KVService {
                     httpExchange.close();
                 }
             } else {
-                try {
-                    var postBody = HttpRequest.BodyPublishers.ofByteArray(body);
-                    var resp = client.send(HttpRequest.newBuilder(URI.create(
-                                    "http://localhost:" + nodePort + "/v0/entity/replica?id="
-                                            + entityID)).PUT(postBody).build(),
-                            HttpResponse.BodyHandlers.ofByteArray());
-                    if (resp.statusCode() == 201) {
-                        answered += 1;
-                    }
-                } catch (Exception e) {
-                    log.warn("Failed to put info into port {}", nodePort);
-                }
+                answered += putEntityHandlerRequestToReplica(nodePort, entityID, body);
             }
         }
 
@@ -343,6 +307,22 @@ public class RybAlexeyKv implements KVService {
             httpExchange.sendResponseHeaders(503, -1);
         }
         httpExchange.close();
+    }
+
+    private int putEntityHandlerRequestToReplica(int nodePort, String entityID, byte[] body) {
+        try {
+            var postBody = HttpRequest.BodyPublishers.ofByteArray(body);
+            var resp = client.send(HttpRequest.newBuilder(URI.create(
+                            "http://localhost:" + nodePort + "/v0/entity/replica?id="
+                                    + entityID)).PUT(postBody).build(),
+                    HttpResponse.BodyHandlers.ofByteArray());
+            if (resp.statusCode() == 201) {
+                return 1;
+            }
+        } catch (Exception e) {
+            log.warn("Failed to put info into port {}", nodePort);
+        }
+        return 0;
     }
 
     private void deleteEntityHandler(HttpExchange httpExchange, String entityID, int ack) throws IOException {
@@ -361,17 +341,7 @@ public class RybAlexeyKv implements KVService {
                     httpExchange.close();
                 }
             } else {
-                try {
-                    var resp = client.send(HttpRequest.newBuilder(URI.create(
-                                    "http://localhost:" + nodePort + "/v0/entity/replica?id="
-                                            + entityID)).DELETE().build(),
-                            HttpResponse.BodyHandlers.ofByteArray());
-                    if (resp.statusCode() == 202) {
-                        answered += 1;
-                    }
-                } catch (Exception e) {
-                    log.warn("Failed to delete info into port {}", nodePort);
-                }
+                answered += deleteEntityHandlerRequestToReplica(nodePort, entityID);
             }
         }
 
@@ -383,6 +353,21 @@ public class RybAlexeyKv implements KVService {
             log.info("deleteEntityHandler for entityID {} 503", entityID);
         }
         httpExchange.close();
+    }
+
+    private int deleteEntityHandlerRequestToReplica(int nodePort, String entityID) {
+        try {
+            var resp = client.send(HttpRequest.newBuilder(URI.create(
+                            "http://localhost:" + nodePort + "/v0/entity/replica?id="
+                                    + entityID)).DELETE().build(),
+                    HttpResponse.BodyHandlers.ofByteArray());
+            if (resp.statusCode() == 202) {
+                return 1;
+            }
+        } catch (Exception e) {
+            log.warn("Failed to delete info into port {}", nodePort);
+        }
+        return 0;
     }
 
     private synchronized void ensureHashInitialized() {
@@ -408,25 +393,5 @@ public class RybAlexeyKv implements KVService {
     private static final class BodyTooLargeException extends IOException {
         @Serial
         private static final long serialVersionUID = 1L;
-    }
-
-    private record ErrorHandler(HttpHandler delegate) implements HttpHandler {
-        @Override
-        public void handle(HttpExchange exchange) throws IOException {
-            try {
-                delegate.handle(exchange);
-            } catch (IllegalArgumentException e) {
-                final var message = e.getMessage();
-                final var body = message.getBytes(StandardCharsets.UTF_8);
-                exchange.sendResponseHeaders(422, body.length);
-                exchange.getResponseBody().write(body);
-            } catch (Exception e) {
-                final var message = e.getMessage();
-                final var body = message.getBytes(StandardCharsets.UTF_8);
-                exchange.sendResponseHeaders(500, body.length);
-                exchange.getResponseBody().write(body);
-            }
-            exchange.close();
-        }
     }
 }
