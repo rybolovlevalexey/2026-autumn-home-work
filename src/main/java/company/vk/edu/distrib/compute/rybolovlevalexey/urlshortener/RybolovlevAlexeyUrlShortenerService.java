@@ -4,20 +4,38 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.Base64;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Random;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 import company.vk.edu.distrib.compute.Dao;
+import company.vk.edu.distrib.compute.moderation.LinkCreatedEvent;
+import company.vk.edu.distrib.compute.moderation.ModerationResultEvent;
+import company.vk.edu.distrib.compute.rybolovlevalexey.kafkautils.RybAlexeyKafkaUtils;
 import company.vk.edu.distrib.compute.urlshortener.UrlShortenerService;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.producer.Producer;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class RybolovlevAlexeyUrlShortenerService implements UrlShortenerService {
+    private boolean serverStarted;
+
+    private static final String TOPIC_LINKS_CREATED = "links.created";
+    private static final String TOPIC_LINKS_MODERATED = "links.moderated";
+    private static final String CONSUMER_GROUP_ID = "rybolovlevalexey-shortener";
 
     private static final String METHOD_GET = "GET";
     private static final String METHOD_POST = "POST";
@@ -28,6 +46,13 @@ public class RybolovlevAlexeyUrlShortenerService implements UrlShortenerService 
     private final int port;
     private final HttpServer server;
     private static final Logger log = LoggerFactory.getLogger(RybolovlevAlexeyUrlShortenerService.class);
+
+    private boolean doModeration;
+    private final ExecutorService executor;
+    private final ExecutorService sendExecutor;
+    private final AtomicBoolean running = new AtomicBoolean(true);
+    @Nullable Producer<String, String> producer;
+    @Nullable KafkaConsumer<String, String> consumer;
 
     private Dao<String> dao;
     private final Dao<String> authDao;
@@ -44,6 +69,58 @@ public class RybolovlevAlexeyUrlShortenerService implements UrlShortenerService 
         server.createContext("/v0/links", new ErrorHandler(linksHandler()));
         server.createContext("/", new ErrorHandler(redirectHandler()));
         server.createContext("/internal/users", new ErrorHandler(usersHandler()));
+
+        this.executor = Executors.newSingleThreadExecutor(r -> new Thread(r, "consumer"));
+        this.sendExecutor = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "moderation-send");
+            t.setDaemon(true);
+            return t;
+        });
+    }
+
+    @Override
+    public void setKafkaBootstrapServers(String bootstrapServers) {
+        if (serverStarted) {
+            throw new IllegalStateException("try to use setKafkaBootstrapServers after starting server");
+        }
+
+        doModeration = true;
+
+        try {
+            this.producer = RybAlexeyKafkaUtils.createProducer(bootstrapServers);
+            this.consumer = RybAlexeyKafkaUtils.createConsumer(bootstrapServers, CONSUMER_GROUP_ID);
+        } catch (Exception e) {
+            if (log.isWarnEnabled()) {
+                log.warn("Failed to create kafka producer {}", e.getMessage());
+            }
+            doModeration = false;
+        }
+    }
+
+    private void runKafkaConsumerLoop() {
+        if (consumer == null) {
+            return;
+        }
+        RybAlexeyKafkaUtils.consumeLoop(consumer, TOPIC_LINKS_MODERATED, running, this::processConsumerLinksModerated);
+    }
+
+    private void processConsumerLinksModerated(ConsumerRecord<String, String> record) {
+        ModerationResultEvent event;
+        try {
+            event = RybAlexeyKafkaUtils.decodeModerated(record.value());
+        } catch (RuntimeException e) {
+            log.warn("failed to decode moderation result event", e);
+            return;
+        }
+        if (!Boolean.TRUE.equals(event.passed())) {
+            try {
+                dao.delete(event.id());
+            } catch (IOException e) {
+                if (log.isInfoEnabled()) {
+                    log.info("failed to delete moderated link {}", event.id(), e);
+                }
+            }
+        }
     }
 
     private HttpHandler statusHandler() {
@@ -145,14 +222,35 @@ public class RybolovlevAlexeyUrlShortenerService implements UrlShortenerService 
     @Override
     public void start() {
         server.start();
+        serverStarted = true;
+        if (consumer != null) {
+            this.executor.submit(this::runKafkaConsumerLoop);
+        }
     }
 
     @Override
     public void stop() {
         this.server.stop(1);
+
         try {
             this.dao.close();
             this.authDao.close();
+            if (consumer != null) {
+                running.set(false);
+                this.consumer.wakeup();
+            }
+            this.executor.shutdown();
+            this.sendExecutor.shutdownNow();
+            try {
+                if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {
+                    executor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            if (producer != null) {
+                this.producer.close();
+            }
         } catch (IOException e) {
             log.error("Failed to save data on stop", e);
         }
@@ -221,6 +319,17 @@ public class RybolovlevAlexeyUrlShortenerService implements UrlShortenerService 
         dao.upsert(linkID, body);
         final var resultBody = "http://localhost:%d/%s".formatted(port, linkID);
         log.info("Sending response {}", resultBody);
+
+        if (doModeration) {
+            LinkCreatedEvent event = new LinkCreatedEvent(linkID, body, Instant.now());
+            ProducerRecord<String, String> record = new ProducerRecord<>(TOPIC_LINKS_CREATED, linkID,
+                RybAlexeyKafkaUtils.encodeCreated(event));
+            sendExecutor.submit(() -> {
+                if (producer != null) {
+                    producer.send(record);
+                }
+            });
+        }
 
         httpExchange.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
         httpExchange.sendResponseHeaders(201, resultBody.getBytes(StandardCharsets.UTF_8).length);

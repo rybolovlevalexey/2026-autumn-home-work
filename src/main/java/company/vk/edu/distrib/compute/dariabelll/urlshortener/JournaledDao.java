@@ -185,6 +185,7 @@ public class JournaledDao implements Dao<String> {
             Path directory = filePath.getParent();
             return !journalFailed
                     && journal.getChannel().isOpen()
+                    && directory != null
                     && Files.isDirectory(directory)
                     && Files.isWritable(directory)
                     && Files.isExecutable(directory)
